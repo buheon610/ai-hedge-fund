@@ -75,7 +75,7 @@ class LLMModel(BaseModel):
 # Load models from JSON file
 def load_models_from_json(json_path: str) -> List[LLMModel]:
     """Load models from a JSON file"""
-    with open(json_path, 'r') as f:
+    with open(json_path, 'r', encoding="utf-8") as f:
         models_data = json.load(f)
     
     models = []

@@ -24,6 +24,8 @@ from src.data.models import (
 
 # Global cache instance
 _cache = get_cache()
+API_REQUEST_TIMEOUT_SECONDS = 15
+API_RATE_LIMIT_BACKOFF_SECONDS = (5, 10, 15)
 
 
 def _make_api_request(url: str, headers: dict, method: str = "GET", json_data: dict = None, max_retries: int = 3) -> requests.Response:
@@ -44,14 +46,28 @@ def _make_api_request(url: str, headers: dict, method: str = "GET", json_data: d
         Exception: If the request fails with a non-429 error
     """
     for attempt in range(max_retries + 1):  # +1 for initial attempt
-        if method.upper() == "POST":
-            response = requests.post(url, headers=headers, json=json_data)
-        else:
-            response = requests.get(url, headers=headers)
-        
+        try:
+            if method.upper() == "POST":
+                response = requests.post(
+                    url,
+                    headers=headers,
+                    json=json_data,
+                    timeout=API_REQUEST_TIMEOUT_SECONDS,
+                )
+            else:
+                response = requests.get(
+                    url,
+                    headers=headers,
+                    timeout=API_REQUEST_TIMEOUT_SECONDS,
+                )
+        except requests.RequestException as exc:
+            logger.warning("API request failed for %s: %s", url, exc)
+            response = requests.Response()
+            response.status_code = 599
+            response._content = str(exc).encode("utf-8", errors="ignore")
+
         if response.status_code == 429 and attempt < max_retries:
-            # Linear backoff: 60s, 90s, 120s, 150s...
-            delay = 60 + (30 * attempt)
+            delay = API_RATE_LIMIT_BACKOFF_SECONDS[min(attempt, len(API_RATE_LIMIT_BACKOFF_SECONDS) - 1)]
             print(f"Rate limited (429). Attempt {attempt + 1}/{max_retries + 1}. Waiting {delay}s before retrying...")
             time.sleep(delay)
             continue
@@ -61,26 +77,54 @@ def _make_api_request(url: str, headers: dict, method: str = "GET", json_data: d
 
 
 def get_prices(ticker: str, start_date: str, end_date: str, api_key: str = None) -> list[Price]:
-    """Fetch price data from cache or API."""
-    # Create a cache key that includes all parameters to ensure exact matches
+    """Fetch price data — yfinance 우선, API 키 있으면 Financial Datasets 사용."""
     cache_key = f"{ticker}_{start_date}_{end_date}"
-    
-    # Check cache first - simple exact match
+
     if cached_data := _cache.get_prices(cache_key):
         return [Price(**price) for price in cached_data]
 
-    # If not in cache, fetch from API
-    headers = {}
+    # ── yfinance fallback (API 키 불필요, 무료) ───────────
     financial_api_key = api_key or os.environ.get("FINANCIAL_DATASETS_API_KEY")
-    if financial_api_key:
-        headers["X-API-KEY"] = financial_api_key
+    if not financial_api_key:
+        try:
+            import yfinance as yf
+            raw = yf.download(
+                ticker,
+                start=start_date,
+                end=end_date,
+                progress=False,
+                auto_adjust=True,
+            )
+            if not raw.empty:
+                import pandas as _pd
+                if isinstance(raw.columns, _pd.MultiIndex):
+                    raw.columns = [c[0].lower() for c in raw.columns]
+                else:
+                    raw.columns = [c.lower() for c in raw.columns]
+                prices = [
+                    Price(
+                        open=float(row["open"]),
+                        high=float(row["high"]),
+                        low=float(row["low"]),
+                        close=float(row["close"]),
+                        volume=int(row["volume"]),
+                        time=str(idx.date()),
+                    )
+                    for idx, row in raw.iterrows()
+                ]
+                _cache.set_prices(cache_key, [p.model_dump() for p in prices])
+                return prices
+        except Exception as e:
+            logger.warning("yfinance fallback failed for %s: %s", ticker, e)
+        return []
 
+    # ── Financial Datasets API (키 있을 때) ──────────────
+    headers = {"X-API-KEY": financial_api_key}
     url = f"https://api.financialdatasets.ai/prices/?ticker={ticker}&interval=day&interval_multiplier=1&start_date={start_date}&end_date={end_date}"
     response = _make_api_request(url, headers)
     if response.status_code != 200:
         return []
 
-    # Parse response with Pydantic model
     try:
         price_response = PriceResponse(**response.json())
         prices = price_response.prices
@@ -91,7 +135,6 @@ def get_prices(ticker: str, start_date: str, end_date: str, api_key: str = None)
     if not prices:
         return []
 
-    # Cache the results using the comprehensive cache key
     _cache.set_prices(cache_key, [p.model_dump() for p in prices])
     return prices
 
