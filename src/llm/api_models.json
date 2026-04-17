@@ -20,8 +20,8 @@
     "provider": "Anthropic"
   },
   {
-    "display_name": "Claude Haiku 4.6",
-    "model_name": "claude-haiku-4-6",
+    "display_name": "Claude Haiku 4.5 (저비용 추천)",
+    "model_name": "claude-haiku-4-5-20251001",
     "provider": "Anthropic"
   },
   {

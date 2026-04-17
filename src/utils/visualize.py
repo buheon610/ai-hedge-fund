@@ -1,4 +1,7 @@
-from langgraph.graph.state import CompiledGraph
+try:
+    from langgraph.graph.state import CompiledGraph
+except ImportError:
+    from langgraph.graph.state import CompiledStateGraph as CompiledGraph
 from langchain_core.runnables.graph import MermaidDrawMethod
 
 
