@@ -21,7 +21,7 @@ langchain-ollama = "0.3.6"
 langgraph = "0.2.56"
 pandas = "^2.1.0"
 numpy = "^1.24.0"
-python-dotenv = "1.0.0"
+python-dotenv = ">=1.0.0"
 matplotlib = "^3.9.2"
 tabulate = "^0.9.0"
 colorama = "^0.4.6"
@@ -38,6 +38,7 @@ alembic = "^1.12.0"
 langchain-gigachat = "^0.3.12"
 langchain-xai = "^0.2.5"
 scipy = "^1.11.0"
+markitdown = {extras = ["pdf", "docx", "xlsx"], version = "^0.1.0"}
 
 [tool.poetry.group.dev.dependencies]
 pytest = "^7.4.0"

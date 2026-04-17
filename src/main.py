@@ -15,6 +15,7 @@ from src.utils.visualize import save_graph_as_png
 from src.cli.input import (
     parse_cli_inputs,
 )
+from src.tools.report_loader import load_reports, format_reports_for_prompt
 
 import argparse
 from datetime import datetime
@@ -52,6 +53,7 @@ def run_hedge_fund(
     selected_analysts: list[str] = [],
     model_name: str = "gpt-4.1",
     model_provider: str = "OpenAI",
+    analyst_reports: list | None = None,
 ):
     # Start progress tracking
     progress.start()
@@ -61,11 +63,18 @@ def run_hedge_fund(
         workflow = create_workflow(selected_analysts if selected_analysts else None)
         agent = workflow.compile()
 
+        # Build initial message — attach analyst reports if provided
+        initial_message = "Make trading decisions based on the provided data."
+        if analyst_reports:
+            report_context = format_reports_for_prompt(analyst_reports)
+            if report_context:
+                initial_message += f"\n\nAdditional context from analyst research reports:\n\n{report_context}"
+
         final_state = agent.invoke(
             {
                 "messages": [
                     HumanMessage(
-                        content="Make trading decisions based on the provided data.",
+                        content=initial_message,
                     )
                 ],
                 "data": {
@@ -74,6 +83,7 @@ def run_hedge_fund(
                     "start_date": start_date,
                     "end_date": end_date,
                     "analyst_signals": {},
+                    "analyst_reports": analyst_reports or [],
                 },
                 "metadata": {
                     "show_reasoning": show_reasoning,
@@ -142,6 +152,11 @@ if __name__ == "__main__":
     tickers = inputs.tickers
     selected_analysts = inputs.selected_analysts
 
+    # Load analyst reports (PDF/Word/Excel) if --reports is specified
+    analyst_reports = []
+    if inputs.reports:
+        analyst_reports = load_reports(inputs.reports, known_tickers=tickers)
+
     # Construct portfolio here
     portfolio = {
         "cash": inputs.initial_cash,
@@ -175,5 +190,6 @@ if __name__ == "__main__":
         selected_analysts=inputs.selected_analysts,
         model_name=inputs.model_name,
         model_provider=inputs.model_provider,
+        analyst_reports=analyst_reports,
     )
     print_trading_output(result)
