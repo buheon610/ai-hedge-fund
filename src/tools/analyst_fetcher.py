@@ -119,6 +119,32 @@ def fetch_analyst_data(ticker: str) -> str | None:
                 "",
             ]
 
+        # 기관 보유 현황
+        try:
+            major = t.major_holders
+            inst_holders = t.institutional_holders
+            if major is not None and not major.empty:
+                insider_pct  = float(major.iloc[0, 0]) * 100 if len(major) > 0 else 0.0
+                inst_pct     = float(major.iloc[1, 0]) * 100 if len(major) > 1 else 0.0
+                lines += [
+                    "### Institutional Ownership",
+                    f"| 구분 | 비율 |",
+                    f"|------|------|",
+                    f"| 기관 보유 | {inst_pct:.1f}% |",
+                    f"| 내부자 보유 | {insider_pct:.1f}% |",
+                    "",
+                ]
+            if inst_holders is not None and not inst_holders.empty:
+                lines.append("Top institutional holders:")
+                for _, row in inst_holders.head(5).iterrows():
+                    holder = str(row.get("Holder", row.get("Name", "—")))
+                    pct_out = row.get("% Out", row.get("pctHeld", None))
+                    pct_str = f"{float(pct_out)*100:.1f}%" if pct_out is not None else "—"
+                    lines.append(f"- {holder}: {pct_str}")
+                lines.append("")
+        except Exception:
+            pass
+
         return "\n".join(lines)
 
     except Exception:
