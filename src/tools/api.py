@@ -154,18 +154,22 @@ def get_financial_metrics(
     if cached_data := _cache.get_financial_metrics(cache_key):
         return [FinancialMetrics(**metric) for metric in cached_data]
 
-    # If not in cache, fetch from API
-    headers = {}
+    # If not in cache, fetch from API or yfinance fallback
     financial_api_key = api_key or os.environ.get("FINANCIAL_DATASETS_API_KEY")
-    if financial_api_key:
-        headers["X-API-KEY"] = financial_api_key
+    if not financial_api_key:
+        from src.tools.yfinance_adapter import get_financial_metrics_yf
+        result = get_financial_metrics_yf(ticker, end_date, period=period, limit=limit)
+        if result:
+            _cache.set_financial_metrics(cache_key, [m.model_dump() for m in result])
+        return result
 
+    headers = {"X-API-KEY": financial_api_key}
     url = f"https://api.financialdatasets.ai/financial-metrics/?ticker={ticker}&report_period_lte={end_date}&limit={limit}&period={period}"
     response = _make_api_request(url, headers)
     if response.status_code != 200:
-        return []
+        from src.tools.yfinance_adapter import get_financial_metrics_yf
+        return get_financial_metrics_yf(ticker, end_date, period=period, limit=limit)
 
-    # Parse response with Pydantic model
     try:
         metrics_response = FinancialMetricsResponse(**response.json())
         financial_metrics = metrics_response.financial_metrics
@@ -176,7 +180,6 @@ def get_financial_metrics(
     if not financial_metrics:
         return []
 
-    # Cache the results as dicts using the comprehensive cache key
     _cache.set_financial_metrics(cache_key, [m.model_dump() for m in financial_metrics])
     return financial_metrics
 
@@ -189,15 +192,14 @@ def search_line_items(
     limit: int = 10,
     api_key: str = None,
 ) -> list[LineItem]:
-    """Fetch line items from API."""
-    # If not in cache or insufficient data, fetch from API
-    headers = {}
+    """Fetch line items from API, yfinance fallback when no API key."""
     financial_api_key = api_key or os.environ.get("FINANCIAL_DATASETS_API_KEY")
-    if financial_api_key:
-        headers["X-API-KEY"] = financial_api_key
+    if not financial_api_key:
+        from src.tools.yfinance_adapter import search_line_items_yf
+        return search_line_items_yf(ticker, line_items, end_date, period=period, limit=limit)
 
+    headers = {"X-API-KEY": financial_api_key}
     url = "https://api.financialdatasets.ai/financials/search/line-items"
-
     body = {
         "tickers": [ticker],
         "line_items": line_items,
@@ -207,8 +209,9 @@ def search_line_items(
     }
     response = _make_api_request(url, headers, method="POST", json_data=body)
     if response.status_code != 200:
-        return []
-    
+        from src.tools.yfinance_adapter import search_line_items_yf
+        return search_line_items_yf(ticker, line_items, end_date, period=period, limit=limit)
+
     try:
         data = response.json()
         response_model = LineItemResponse(**data)
@@ -216,10 +219,7 @@ def search_line_items(
     except Exception as e:
         logger.warning("Failed to parse line items response for %s: %s", ticker, e)
         return []
-    if not search_results:
-        return []
 
-    # Cache the results
     return search_results[:limit]
 
 
@@ -238,12 +238,11 @@ def get_insider_trades(
     if cached_data := _cache.get_insider_trades(cache_key):
         return [InsiderTrade(**trade) for trade in cached_data]
 
-    # If not in cache, fetch from API
-    headers = {}
     financial_api_key = api_key or os.environ.get("FINANCIAL_DATASETS_API_KEY")
-    if financial_api_key:
-        headers["X-API-KEY"] = financial_api_key
+    if not financial_api_key:
+        return []  # yfinance 미지원 — 에이전트가 빈 리스트 처리
 
+    headers = {"X-API-KEY": financial_api_key}
     all_trades = []
     current_end_date = end_date
 
@@ -304,12 +303,12 @@ def get_company_news(
     if cached_data := _cache.get_company_news(cache_key):
         return [CompanyNews(**news) for news in cached_data]
 
-    # If not in cache, fetch from API
-    headers = {}
     financial_api_key = api_key or os.environ.get("FINANCIAL_DATASETS_API_KEY")
-    if financial_api_key:
-        headers["X-API-KEY"] = financial_api_key
+    if not financial_api_key:
+        from src.tools.yfinance_adapter import get_company_news_yf
+        return get_company_news_yf(ticker, end_date, start_date=start_date, limit=min(limit, 20))
 
+    headers = {"X-API-KEY": financial_api_key}
     all_news = []
     current_end_date = end_date
 
@@ -360,21 +359,19 @@ def get_market_cap(
     end_date: str,
     api_key: str = None,
 ) -> float | None:
-    """Fetch market cap from the API."""
-    # Check if end_date is today
-    if end_date == datetime.datetime.now().strftime("%Y-%m-%d"):
-        # Get the market cap from company facts API
-        headers = {}
-        financial_api_key = api_key or os.environ.get("FINANCIAL_DATASETS_API_KEY")
-        if financial_api_key:
-            headers["X-API-KEY"] = financial_api_key
+    """Fetch market cap — yfinance fallback when no API key."""
+    financial_api_key = api_key or os.environ.get("FINANCIAL_DATASETS_API_KEY")
+    if not financial_api_key:
+        from src.tools.yfinance_adapter import get_market_cap_yf
+        return get_market_cap_yf(ticker, end_date)
 
+    if end_date == datetime.datetime.now().strftime("%Y-%m-%d"):
+        headers = {"X-API-KEY": financial_api_key}
         url = f"https://api.financialdatasets.ai/company/facts/?ticker={ticker}"
         response = _make_api_request(url, headers)
         if response.status_code != 200:
-            print(f"Error fetching company facts: {ticker} - {response.status_code}")
-            return None
-
+            from src.tools.yfinance_adapter import get_market_cap_yf
+            return get_market_cap_yf(ticker, end_date)
         data = response.json()
         response_model = CompanyFactsResponse(**data)
         return response_model.company_facts.market_cap
@@ -382,13 +379,7 @@ def get_market_cap(
     financial_metrics = get_financial_metrics(ticker, end_date, api_key=api_key)
     if not financial_metrics:
         return None
-
-    market_cap = financial_metrics[0].market_cap
-
-    if not market_cap:
-        return None
-
-    return market_cap
+    return financial_metrics[0].market_cap
 
 
 def prices_to_df(prices: list[Price]) -> pd.DataFrame:
