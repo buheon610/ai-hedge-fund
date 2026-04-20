@@ -15,9 +15,18 @@ FinancialMetrics / LineItem / Price / CompanyNews 모델을 동일 인터페이�
 """
 from __future__ import annotations
 
+import logging
 import math
 from datetime import datetime, date
 from typing import Any
+
+logger = logging.getLogger(__name__)
+
+try:
+    from yahooquery import Ticker as YQTicker
+    _YQ_AVAILABLE = True
+except ImportError:
+    _YQ_AVAILABLE = False
 
 # ── 캐시 ──────────────────────────────────────────────
 _INFO_CACHE:    dict[str, dict]   = {}
@@ -45,6 +54,18 @@ def _get_info(ticker: str) -> dict:
         except Exception:
             _INFO_CACHE[ticker] = {}
     return _INFO_CACHE[ticker]
+
+
+def _get_info_yq(ticker: str) -> dict:
+    if not _YQ_AVAILABLE:
+        return {}
+    try:
+        data = YQTicker(ticker).financial_data or {}
+    except Exception:
+        return {}
+    if isinstance(data, dict) and ticker in data and isinstance(data[ticker], dict):
+        return data[ticker]
+    return data if isinstance(data, dict) else {}
 
 
 def _get_stmts(ticker: str) -> dict[str, Any]:
@@ -90,6 +111,18 @@ def get_financial_metrics_yf(
     from src.data.models import FinancialMetrics
 
     info = _get_info(ticker)
+    if not info:
+        # When yfinance returns an empty info dict, retry the core valuation fields via yahooquery.
+        yq_info = _get_info_yq(ticker)
+        if yq_info:
+            logger.warning("yfinance info empty for %s, falling back to yahooquery financial_data", ticker)
+            info = {
+                "currency": yq_info.get("financialCurrency") or yq_info.get("currency") or "USD",
+                "marketCap": yq_info.get("marketCap"),
+                "trailingPE": yq_info.get("trailingPE"),
+                "priceToBook": yq_info.get("priceToBook"),
+                "returnOnEquity": yq_info.get("returnOnEquity"),
+            }
     stmts = _get_stmts(ticker)
 
     # free_cash_flow_yield
@@ -459,30 +492,84 @@ def get_market_cap_yf(ticker: str, end_date: str) -> float | None:
 # ── 4. get_prices ─────────────────────────────────────
 def get_prices_yf(ticker: str, start_date: str, end_date: str) -> list:
     from src.data.models import Price
+
+    def _build_prices(rows: list[dict[str, Any]]) -> list[Price]:
+        prices: list[Price] = []
+        for row in rows:
+            try:
+                prices.append(Price(
+                    open=float(row.get("open", 0) or 0),
+                    close=float(row.get("close", 0) or 0),
+                    high=float(row.get("high", 0) or 0),
+                    low=float(row.get("low", 0) or 0),
+                    volume=int(float(row.get("volume", 0) or 0)),
+                    time=str(row.get("time", ""))[:10],
+                ))
+            except Exception:
+                continue
+        return prices
+
+    def _get_prices_yq(ticker: str, start: str, end: str) -> list[Price]:
+        if not _YQ_AVAILABLE:
+            return []
+        try:
+            hist = YQTicker(ticker).history(start=start, end=end)
+        except Exception:
+            return []
+        if hist is None or getattr(hist, "empty", False):
+            return []
+
+        rows: list[dict[str, Any]] = []
+        try:
+            index_names = list(getattr(hist.index, "names", []) or [])
+            if "symbol" in index_names:
+                frame = hist.xs(ticker, level="symbol")
+            else:
+                frame = hist
+            for ts, row in frame.iterrows():
+                rows.append(
+                    {
+                        "open": row.get("open"),
+                        "close": row.get("close"),
+                        "high": row.get("high"),
+                        "low": row.get("low"),
+                        "volume": row.get("volume"),
+                        "time": str(ts)[:10],
+                    }
+                )
+        except Exception:
+            return []
+        return _build_prices(rows)
+
     try:
         import yfinance as yf
         import pandas as pd
         raw = yf.download(ticker, start=start_date, end=end_date,
                           auto_adjust=True, progress=False)
         if raw.empty:
-            return []
+            # Explicit yahooquery fallback for symbols where yfinance returns an empty frame.
+            logger.warning("yfinance empty for %s, falling back to yahooquery", ticker)
+            return _get_prices_yq(ticker, start_date, end_date)
         if isinstance(raw.columns, pd.MultiIndex):
             raw.columns = [c[0].lower() for c in raw.columns]
         else:
             raw.columns = [str(c).lower() for c in raw.columns]
-        prices = []
+        rows = []
         for ts, row in raw.iterrows():
-            prices.append(Price(
-                open=float(row.get("open", 0)),
-                close=float(row.get("close", 0)),
-                high=float(row.get("high", 0)),
-                low=float(row.get("low", 0)),
-                volume=int(row.get("volume", 0)),
-                time=str(ts)[:10],
-            ))
-        return prices
+            rows.append(
+                {
+                    "open": row.get("open", 0),
+                    "close": row.get("close", 0),
+                    "high": row.get("high", 0),
+                    "low": row.get("low", 0),
+                    "volume": row.get("volume", 0),
+                    "time": str(ts)[:10],
+                }
+            )
+        return _build_prices(rows)
     except Exception:
-        return []
+        logger.warning("yfinance failed for %s, falling back to yahooquery", ticker)
+        return _get_prices_yq(ticker, start_date, end_date)
 
 
 _POS_KW = {"surge", "gain", "beat", "record", "growth", "upgrade", "bullish",
@@ -550,3 +637,7 @@ def get_insider_trades_yf(
 ) -> list:
     """yfinance는 insider trades 미지원 — 빈 리스트 반환."""
     return []
+
+
+get_prices = get_prices_yf
+get_financial_metrics = get_financial_metrics_yf

@@ -39,6 +39,7 @@ langchain-gigachat = "^0.3.12"
 langchain-xai = "^0.2.5"
 scipy = "^1.11.0"
 markitdown = {extras = ["pdf", "docx", "xlsx"], version = "^0.1.0"}
+yahooquery = ">=2.3,<3.0"
 
 [tool.poetry.group.dev.dependencies]
 pytest = "^7.4.0"
