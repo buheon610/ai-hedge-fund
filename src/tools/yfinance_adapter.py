@@ -234,7 +234,80 @@ def get_financial_metrics_yf(
             else None
         ),
     )
-    return [metrics]
+    result = [metrics]
+
+    # ── 분기별 히스토리 스텁 (growth_analyst 4건 이상 요구 충족) ──
+    inc_q = _pick_df(stmts, "income_q", "income_a")
+    cf_q  = _pick_df(stmts, "cashflow_q", "cashflow_a")
+
+    if inc_q is not None and not inc_q.empty:
+        try:
+            import pandas as _pd
+            cutoff = _pd.Timestamp(end_date)
+            cols = [c for c in inc_q.columns if _pd.Timestamp(c) <= cutoff]
+        except Exception:
+            cols = list(inc_q.columns)
+
+        rev_row = _row(inc_q, "Total Revenue", "Revenue")
+        gp_row  = _row(inc_q, "Gross Profit")
+        oi_row  = _row(inc_q, "Operating Income", "EBIT")
+        ni_row  = _row(inc_q, "Net Income", "Net Income Common Stockholders")
+        fcf_row = _row(cf_q, "Free Cash Flow") if cf_q is not None else None
+
+        def _qval(row, idx):
+            if row is None:
+                return None
+            try:
+                return _sf(row.iloc[idx]) if idx < len(row) else None
+            except Exception:
+                return None
+
+        for i in range(1, min(len(cols), limit)):
+            col = cols[i]
+            period_str = str(col)[:10]
+            rev = _qval(rev_row, i)
+            gp  = _qval(gp_row, i)
+            oi  = _qval(oi_row, i)
+            ni  = _qval(ni_row, i)
+            fcf_h = _qval(fcf_row, i)
+
+            gross_m = _sf(gp / rev) if gp is not None and rev and rev > 0 else None
+            op_m    = _sf(oi / rev) if oi is not None and rev and rev > 0 else None
+            net_m   = _sf(ni / rev) if ni is not None and rev and rev > 0 else None
+
+            yoy = i + 4
+            rev_yoy = fcf_yoy = None
+            if yoy < len(cols):
+                rev_ago = _qval(rev_row, yoy)
+                if rev and rev_ago and rev_ago > 0:
+                    rev_yoy = round((rev - rev_ago) / abs(rev_ago), 4)
+                fcf_ago = _qval(fcf_row, yoy)
+                if fcf_h is not None and fcf_ago and fcf_ago != 0:
+                    fcf_yoy = round((fcf_h - fcf_ago) / abs(fcf_ago), 4)
+
+            result.append(FinancialMetrics(
+                ticker=ticker, report_period=period_str, period="quarterly",
+                currency=info.get("currency", "USD"),
+                gross_margin=gross_m, operating_margin=op_m, net_margin=net_m,
+                revenue_growth=rev_yoy, earnings_per_share_growth=None,
+                free_cash_flow_growth=fcf_yoy, earnings_growth=None,
+                market_cap=None, enterprise_value=None,
+                price_to_earnings_ratio=None, price_to_book_ratio=None,
+                price_to_sales_ratio=None, enterprise_value_to_ebitda_ratio=None,
+                enterprise_value_to_revenue_ratio=None, free_cash_flow_yield=None,
+                peg_ratio=None, return_on_equity=None, return_on_assets=None,
+                return_on_invested_capital=None, asset_turnover=None,
+                inventory_turnover=None, receivables_turnover=None,
+                days_sales_outstanding=None, operating_cycle=None,
+                working_capital_turnover=None, current_ratio=None,
+                quick_ratio=None, cash_ratio=None, operating_cash_flow_ratio=None,
+                debt_to_equity=None, debt_to_assets=None, interest_coverage=None,
+                book_value_growth=None, operating_income_growth=None,
+                ebitda_growth=None, payout_ratio=None, earnings_per_share=None,
+                book_value_per_share=None, free_cash_flow_per_share=None,
+            ))
+
+    return result[:limit]
 
 
 # ── 2. search_line_items ──────────────────────────────
@@ -412,6 +485,24 @@ def get_prices_yf(ticker: str, start_date: str, end_date: str) -> list:
         return []
 
 
+_POS_KW = {"surge", "gain", "beat", "record", "growth", "upgrade", "bullish",
+           "exceed", "strong", "rally", "rise", "profit", "soar", "outperform",
+           "positive", "launch", "win", "expand", "contract", "buy"}
+_NEG_KW = {"drop", "fall", "miss", "loss", "decline", "downgrade", "bearish",
+           "weak", "crash", "warn", "risk", "concern", "cut", "layoff", "fine",
+           "penalty", "probe", "lawsuit", "recall", "disappoint", "sell", "short"}
+
+def _news_sentiment(title: str) -> str:
+    words = set(title.lower().split())
+    pos = len(words & _POS_KW)
+    neg = len(words & _NEG_KW)
+    if pos > neg:
+        return "positive"
+    if neg > pos:
+        return "negative"
+    return "neutral"
+
+
 # ── 5. get_company_news ───────────────────────────────
 def get_company_news_yf(
     ticker: str,
@@ -441,7 +532,7 @@ def get_company_news_yf(
                     source=source or "Yahoo Finance",
                     date=pub_date,
                     url=url or "",
-                    sentiment=None,
+                    sentiment=_news_sentiment(title or ""),
                 ))
             except Exception:
                 continue
