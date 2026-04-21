@@ -28,6 +28,14 @@ try:
 except ImportError:
     _YQ_AVAILABLE = False
 
+# yfinance SQLite 캐시 디렉터리를 선제적으로 생성 — 미존재 시 OperationalError 방지
+try:
+    import os as _os, platformdirs as _pd
+    _yf_cache = _os.path.join(_pd.user_cache_dir(), "py-yfinance")
+    _os.makedirs(_yf_cache, exist_ok=True)
+except Exception:
+    pass
+
 # ── 캐시 ──────────────────────────────────────────────
 _INFO_CACHE:    dict[str, dict]   = {}
 _STMT_CACHE:    dict[str, Any]    = {}
